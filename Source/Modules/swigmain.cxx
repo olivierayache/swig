@@ -31,6 +31,7 @@ extern "C" {
   Language *swig_go(void);
   Language *swig_guile(void);
   Language *swig_java(void);
+  Language *swig_kotlin(void);
   Language *swig_javascript(void);
   Language *swig_lua(void);
   Language *swig_mzscheme(void);
@@ -60,6 +61,7 @@ static TargetLanguageModule modules[] = {
   {"-go", swig_go, "Go", Supported},
   {"-guile", swig_guile, "Guile", Supported},
   {"-java", swig_java, "Java", Supported},
+  {"-k", swig_kotlin, "Kotlin", Supported},
   {"-javascript", swig_javascript, "Javascript", Supported},
   {"-lua", swig_lua, "Lua", Supported},
   {"-modula3", NULL, "Modula 3", Disabled},
