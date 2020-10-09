@@ -86,6 +86,7 @@
   @Suppress("unused")
   private constructor(swigValue: Int) {
     this.swigValue.value = swigValue
+    this.swigValueSet.value = 1
   }
 
   @Suppress("unused")
@@ -93,7 +94,8 @@
     this.swigValue.value = swigEnum.swigValue.value
   }
 
-  private val swigValue = kotlin.native.concurrent.AtomicInt(-1)
+  private val swigValue = kotlin.native.concurrent.AtomicInt(0)
+  private val swigValueSet = kotlin.native.concurrent.AtomicInt(0)
 
   companion object {
 
@@ -102,7 +104,7 @@
     init{
       var next = 0
       for (swigEnum in swigValues){
-        if (swigEnum.swigValue.value != -1){
+        if (swigEnum.swigValueSet.value != 0){
           next = swigEnum.swigValue.value
         }else{
           swigEnum.swigValue.value = next
