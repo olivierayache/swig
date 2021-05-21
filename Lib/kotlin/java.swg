@@ -1229,6 +1229,7 @@ Swig::LocalRefGuard $1_refguard(jenv, $input); }
   PTRCTOR_VISIBILITY constructor(cPtr: Long, cMemoryOwn: Boolean) {
     swigCMemOwn = cMemoryOwn
     swigCPtr = cPtr
+    freeze()
   }
 
 %}
@@ -1239,6 +1240,7 @@ Swig::LocalRefGuard $1_refguard(jenv, $input); }
 
   PTRCTOR_VISIBILITY constructor(cPtr: Long, cMemoryOwn: Boolean): super($imclassname.$javaclazznameSWIGUpcast(cPtr), cMemoryOwn) {
     swigCPtr = cPtr
+    freeze()
   }
 
 %}
@@ -1251,10 +1253,12 @@ Swig::LocalRefGuard $1_refguard(jenv, $input); }
 
   PTRCTOR_VISIBILITY constructor(cPtr: Long, @SuppressWarnings("unused") futureUse: Boolean) {
     swigCPtr = cPtr
+    freeze()
   }
 
   DEFAULTCTOR_VISIBILITY constructor() {
     swigCPtr = 0;
+    freeze()
   }
 
   //CPTR_VISIBILITY static long getCPtr($javaclassname obj) {
