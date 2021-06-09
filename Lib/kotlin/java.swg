@@ -128,12 +128,12 @@ SWIGINTERN jint SWIG_JavaIntFromSize_t(size_t size) {
 
 %typemap(jni) char *, char *&, char[ANY], char[]               "char *"
 %typemap(jtype) char *, char *&, char[ANY], char[]               "char *"
-%typemap(jstype) char *, char *&, char[ANY], char[]               "CPointer<ByteVar>?"
+%typemap(jstype) char *, char *&, char[ANY], char[]               "String"
 
 %typemap(jni) const char *, const char *&, const char[ANY], const char[]               "const char *"
 %typemap(jtype) const char *, const char *&, const char[ANY], const char[]               "const char *"
 %typemap(jstype) const char *, const char *&, const char[ANY], const char[]               "String"
-%typemap(jstypeout) const char *               "CPointer<ByteVar>?"
+%typemap(jstypeout) const char *               "String"
 
 %typemap(jni) int *, int *&, int[ANY], int[]               "int *"
 %typemap(jtype) int *, int *&, int[ANY], int[]               "int *"
@@ -214,8 +214,8 @@ SWIGINTERN jint SWIG_JavaIntFromSize_t(size_t size) {
 %typemap(jtype) SWIGTYPE [] "long"
 %typemap(jstype) SWIGTYPE [] "$javaclassname"
 
-%typemap(jni) SWIGTYPE * "long"
-%typemap(jtype) SWIGTYPE * "long"
+%typemap(jni) SWIGTYPE * "intptr_t"
+%typemap(jtype) SWIGTYPE * "intptr_t"
 %typemap(jstype) SWIGTYPE * "$javaclassname"
 
 %typemap(jni) SWIGTYPE & "jlong"
@@ -1141,9 +1141,16 @@ Swig::LocalRefGuard $1_refguard(jenv, $input); }
                   void * {
     return $jnicall;
   }
-%typemap(javaout) char *, char *&, char[ANY], char[] {
-    return $jnicall;
-  }
+%typemap(javaout) char *, char *&, char[ANY], char[] %{?{
+    val ptr = $jnicall
+    val ret = ptr?.toKString()
+    ptr?.let{nativeHeap.free(ptr.rawValue)}
+    return ret
+  }%}
+
+%typemap(javaout) const char *, const char *&, const char[ANY], const char[] %{?{
+    return $jnicall?.toKString()
+  }%}
 %typemap(javaout) jboolean,
                   jchar,
                   jbyte,
@@ -1177,10 +1184,12 @@ Swig::LocalRefGuard $1_refguard(jenv, $input); }
 %typemap(javaout) SWIGTYPE && {
     return $javaclassname($jnicall, $owner);
   }
-%typemap(javaout) SWIGTYPE *, SWIGTYPE [] %{?{
+%typemap(javaout) SWIGTYPE *, SWIGTYPE [] %{{
     val cPtr = $jnicall;
-    return if (cPtr == 0L) null else $javaclassname(cPtr, $owner);
+    return if (cPtr == 0L) throw IllegalArgumentException("cPtr can't be 0") else $javaclassname(cPtr, $owner);
   }%}
+%typemap(expectjavaout) char *, char [] %{?%}
+%typemap(expectjavaout) const char *, const char [] %{?%}
 %typemap(javaout) SWIGTYPE (CLASS::*) {
     String cMemberPtr = $jnicall;
     return (cMemberPtr == null) ? null : new $javaclassname(cMemberPtr, $owner);
@@ -1211,7 +1220,8 @@ Swig::LocalRefGuard $1_refguard(jenv, $input); }
 
 /* Typemaps used for the generation of proxy and type wrapper class code */
 %typemap(javabase)             SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
-%typemap(javaclassmodifiers)   SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) "open class"
+%typemap(javaclassmodifiers)   SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) "actual open class"
+%typemap(expectclassmodifiers)   SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) "expect open class"
 %typemap(javacode)             SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
 %typemap(javaimports)          SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
 %typemap(javainterfaces)       SWIGTYPE, SWIGTYPE *, SWIGTYPE &, SWIGTYPE &&, SWIGTYPE [], SWIGTYPE (CLASS::*) ""
@@ -1221,12 +1231,19 @@ Swig::LocalRefGuard $1_refguard(jenv, $input); }
 %define SWIG_JAVABODY_METHODS(PTRCTOR_VISIBILITY, CPTR_VISIBILITY, TYPE...) SWIG_JAVABODY_PROXY(PTRCTOR_VISIBILITY, CPTR_VISIBILITY, TYPE) %enddef // legacy name
 
 %define SWIG_JAVABODY_PROXY(PTRCTOR_VISIBILITY, CPTR_VISIBILITY, TYPE...)
+// Base expect proxy classes
+%typemap(expectbody) TYPE %{
+
+  PTRCTOR_VISIBILITY constructor(cPtr: Long, cMemoryOwn: Boolean)
+
+%}
+
 // Base proxy classes
 %typemap(javabody) TYPE %{
   private var swigCPtr: Long
   protected var swigCMemOwn: Boolean
 
-  PTRCTOR_VISIBILITY constructor(cPtr: Long, cMemoryOwn: Boolean) {
+  actual PTRCTOR_VISIBILITY constructor(cPtr: Long, cMemoryOwn: Boolean) {
     swigCMemOwn = cMemoryOwn
     swigCPtr = cPtr
     freeze()
@@ -1238,7 +1255,7 @@ Swig::LocalRefGuard $1_refguard(jenv, $input); }
 %typemap(javabody_derived) TYPE %{
   private var swigCPtr: Long = -1
 
-  PTRCTOR_VISIBILITY constructor(cPtr: Long, cMemoryOwn: Boolean): super($imclassname.$javaclazznameSWIGUpcast(cPtr), cMemoryOwn) {
+  actual PTRCTOR_VISIBILITY constructor(cPtr: Long, cMemoryOwn: Boolean): super($imclassname.$javaclazznameSWIGUpcast(cPtr), cMemoryOwn) {
     swigCPtr = cPtr
     freeze()
   }
@@ -1282,8 +1299,12 @@ Swig::LocalRefGuard $1_refguard(jenv, $input); }
   }
 %}
 
+%typemap(expectgetcptr) SWIGTYPE %{
+  CPTR_VISIBILITY fun getCPtr(obj:$javaclassname):Long
+%}
+
 %typemap(getcptr) SWIGTYPE %{
-  CPTR_VISIBILITY fun getCPtr(obj:$javaclassname):Long {
+  actual CPTR_VISIBILITY fun getCPtr(obj:$javaclassname):Long {
     return if (obj == null) 0L else obj.swigCPtr
   }
 %}
@@ -1446,4 +1467,3 @@ SWIG_PROXY_CONSTRUCTOR(true, true, SWIGTYPE)
 
 // Default enum handling
 %include <enumtypesafe.swg>
-

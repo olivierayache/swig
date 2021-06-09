@@ -60,7 +60,8 @@
     return $javaclassname.swigToEnum($jnicall);
   }
 
-%typemap(javaclassmodifiers) enum SWIGTYPE "public enum class"
+%typemap(javaclassmodifiers) enum SWIGTYPE "actual enum class"
+%typemap(expectclassmodifiers) enum SWIGTYPE "$expect enum class"
 %typemap(javabase)           enum SWIGTYPE ""
 %typemap(javacode)           enum SWIGTYPE ""
 %typemap(javaimports)        enum SWIGTYPE ""
@@ -126,4 +127,3 @@
 %}
 
 %javaenum(proper);
-

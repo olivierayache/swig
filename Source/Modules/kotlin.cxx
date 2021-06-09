@@ -49,6 +49,7 @@ class KOTLIN:public Language {
   bool member_func_flag;	// flag set when wrapping a member function
   bool doxygen;			//flag for converting found doxygen to javadoc
   bool comment_creation_chatter; //flag for getting information about where comments were created in java.cxx
+  bool is_expect;
   
   String *imclass_name;		// intermediary class name
   String *module_class_name;	// module class name
@@ -428,9 +429,9 @@ public:
     constants_interface_name = NewStringf("%sConstants", module_class_name);
 
     // module class and intermediary classes are always created
-    if (!addSymbol(imclass_name, n))
+    if (!is_expect && !addSymbol(imclass_name, n))
       return SWIG_ERROR;
-    if (!addSymbol(module_class_name, n))
+    if (!is_expect && !addSymbol(module_class_name, n))
       return SWIG_ERROR;
 
     imclass_class_code = NewString("");
@@ -557,6 +558,7 @@ public:
       Replaceall(imclass_class_code, "$module", module_class_name);
       Replaceall(imclass_class_code, "$imclassname", imclass_name);
       Printf(f_im, "#include <stdbool.h>\n");
+      Printf(f_im, "#include <stdint.h>\n");
       Printv(f_im, imclass_class_code, NIL);
       Printv(f_im, imclass_cppcasts_code, NIL);
 //      if (Len(imclass_directors) > 0)
@@ -882,6 +884,10 @@ public:
     String *nondir_args = NewString("");
     bool is_destructor = (Cmp(Getattr(n, "nodeType"), "destructor") == 0);
 
+    // A new wrapper function object
+    Wrapper *f = NewWrapper();
+    
+    if (!is_expect) {
     if (!Getattr(n, "sym:overloaded")) {
       if (!addSymbol(symname, n, imclass_name))
 	return SWIG_ERROR;
@@ -892,9 +898,6 @@ public:
        a c/c++ function) and generating the JNI c code. Each Java wrapper function has a 
        matching JNI c function call.
      */
-
-    // A new wrapper function object
-    Wrapper *f = NewWrapper();
 
     // Make a wrapper name for this function
     String *jniname = makeValidJniName(overloaded_name);
@@ -1166,6 +1169,8 @@ public:
     if (!(proxy_flag && is_wrapping_class()) && !enum_constant_flag) {
       moduleClassFunctionHandler(n);
     }
+    
+    }
 
     /* 
      * Generate the proxy class getters/setters for public member variables.
@@ -1258,11 +1263,19 @@ public:
    * ---------------------------------------------------------------------- */
 
   virtual int enumDeclaration(Node *n) {
-
+      if (proxy_flag && is_wrapping_class()) {
+          return enumDeclaration(n, is_expect);
+      }else{
+          return enumDeclaration(n, true) == SWIG_OK ? enumDeclaration(n, false) : SWIG_ERROR;
+      }
+  }
+  
+  int enumDeclaration(Node *n, bool is_expect) {
+    this->is_expect = is_expect;
     if (!ImportMode) {
       if (getCurrentClass() && (cplus_mode != PUBLIC))
 	return SWIG_NOWRAP;
-
+      
       String *nspace = Getattr(n, "sym:nspace"); // NSpace/getNSpace() only works during Language::enumDeclaration call
       if (proxy_flag && !is_wrapping_class()) {
 	// Global enums / enums in a namespace
@@ -1288,7 +1301,7 @@ public:
 	}
 
 	String *scope = getCurrentScopeName(nspace);
-	if (!addSymbol(symname, n, scope))
+	if (!is_expect && !addSymbol(symname, n, scope))
 	  return SWIG_ERROR;
 
 	// Pure Java baseclass and interfaces
@@ -1296,7 +1309,7 @@ public:
 	const String *pure_interfaces = typemapLookup(n, "javainterfaces", typemap_lookup_type, WARN_NONE);
 
 	// Emit the enum
-	Printv(enum_code, typemapLookup(n, "javaclassmodifiers", typemap_lookup_type, WARN_JAVA_TYPEMAP_CLASSMOD_UNDEF),	// Class modifiers (enum modifiers really)
+	Printv(enum_code, typemapLookup(n, is_expect ? "expectclassmodifiers" : "javaclassmodifiers", typemap_lookup_type, WARN_JAVA_TYPEMAP_CLASSMOD_UNDEF),	// Class modifiers (enum modifiers really)
 	       " ", symname, *Char(pure_baseclass) ?	// Bases
 	       " : " : "", pure_baseclass, *Char(pure_interfaces) ?	// Interfaces
 	       " implements " : "", pure_interfaces, " {\n", NIL);
@@ -1326,8 +1339,8 @@ public:
 	// Wrap (non-anonymous) C/C++ enum within a typesafe, typeunsafe or proper Java enum
 	// Finish the enum declaration
 	// Typemaps are used to generate the enum definition in a similar manner to proxy classes.
-	Printv(enum_code, (enum_feature == ProperEnum) ? ";\n" : "", typemapLookup(n, "javabody", typemap_lookup_type, WARN_JAVA_TYPEMAP_JAVABODY_UNDEF),	// main body of class
-	       typemapLookup(n, "javacode", typemap_lookup_type, WARN_NONE),	// extra Java code
+	Printv(enum_code, (enum_feature == ProperEnum) ? ";\n" : "", is_expect ? "" : typemapLookup(n, "javabody", typemap_lookup_type, WARN_JAVA_TYPEMAP_JAVABODY_UNDEF),	// main body of class
+	       is_expect ? "" : typemapLookup(n, "javacode", typemap_lookup_type, WARN_NONE),	// extra Java code
 	       "}", NIL);
 
 	Replaceall(enum_code, "$javaclassname", symname);
@@ -1344,41 +1357,49 @@ public:
 	  // Add extra indentation
 	  Replaceall(enum_code, "\n", "\n  ");
 	  Replaceall(enum_code, "  \n", "\n");
+          Replaceall(enum_code, "$expect", "");
 	  if (GetFlag(getCurrentClass(), "feature:interface"))
 	    Printv(interface_class_code, "  ", enum_code, "\n\n", NIL);
 	  else
 	    Printv(proxy_class_constants_code, "  ", enum_code, "\n\n", NIL);
 	} else {
 	  // Global enums are defined in their own file
-	  String *output_directory = outputDirectory(nspace);
-	  String *filen = NewStringf("%s%s.kt", output_directory, symname);
-	  File *f_enum = NewFile(filen, "w", SWIG_output_files());
-	  if (!f_enum) {
-	    FileErrorDisplay(filen);
-	    SWIG_exit(EXIT_FAILURE);
-	  }
-	  Append(filenames_list, Copy(filen));
-	  Delete(filen);
-	  filen = NULL;
+          String *output_directory = outputDirectory(nspace);
+//          String *common_output_directory = Copy(output_directory);
+//          Printv(common_output_directory, "common", SWIG_FILE_DELIMITER, 0);
+//          if (is_expect)
+//              Swig_new_subdirectory(output_directory, common_output_directory);  
+          String *filen = NewStringf("%s%s.kt", output_directory, symname);
+          File *f_enum = NewFile(filen, "w", SWIG_output_files());
+          if (!f_enum) {
+              FileErrorDisplay(filen);
+              SWIG_exit(EXIT_FAILURE);
+          }
+          Append(filenames_list, Copy(filen));
+          Delete(filen);
+          filen = NULL;
 
-	  // Start writing out the enum file
-	  emitBanner(f_enum);
+          // Start writing out the enum file
+          emitBanner(f_enum);
 
-	  if (package || nspace) {
-	    Printf(f_enum, "package ");
-	    if (package)
-	      Printv(f_enum, package, nspace ? "." : "", NIL);
-	    if (nspace)
-	      Printv(f_enum, nspace, NIL);
-	    Printf(f_enum, ";\n");
-	  }
+          if (package || nspace) {
+              Printf(f_enum, "package ");
+              if (package)
+                  Printv(f_enum, package, nspace ? "." : "", NIL);
+              if (nspace)
+                  Printv(f_enum, nspace, NIL);
+              Printf(f_enum, ";\n");
+          }
 
-	  Printv(f_enum, typemapLookup(n, "javaimports", typemap_lookup_type, WARN_NONE), // Import statements
-		 "\n", enum_code, "\n", NIL);
+          Replaceall(enum_code, "$expect", "expect");
 
-	  Printf(f_enum, "\n");
-	  Delete(f_enum);
-	  Delete(output_directory);
+          Printv(f_enum, typemapLookup(n, "javaimports", typemap_lookup_type, WARN_NONE), // Import statements
+                  "\n", enum_code, "\n", NIL);
+
+          Printf(f_enum, "\n");
+          Delete(f_enum);
+          Delete(output_directory);
+          //Delete(common_output_directory);
 	}
       } else {
 	// Wrap C++ enum with simple constant
@@ -1397,7 +1418,7 @@ public:
 	full_imclass_name = 0;
       }
     }
-    return SWIG_OK;
+      return SWIG_OK;
   }
 
   /* ----------------------------------------------------------------------
@@ -1465,7 +1486,7 @@ public:
 	else
 	  Printf(scope, ".%s", Getattr(parent, "sym:name"));
       }
-      if (!addSymbol(symname, n, scope))
+      if (!is_expect && !addSymbol(symname, n, scope))
 	return SWIG_ERROR;
       
       if ((enum_feature == ProperEnum) && parent_name && !unnamedinstance) {
@@ -1486,7 +1507,7 @@ public:
 	// Wrap (non-anonymous) C/C++ enum with a proper Java enum
 	// Emit the enum item.
 	Printf(enum_code, "  %s", symname);
-	if (Getattr(n, "enumvalue")) {
+	if (!is_expect && Getattr(n, "enumvalue")) {
 	  String *value = enumValue(n);
 	  Printf(enum_code, "(%s)", value);
 	  Delete(value);
@@ -1549,6 +1570,9 @@ public:
    * ------------------------------------------------------------------------ */
 
   virtual int constantWrapper(Node *n) {
+      
+    //Printf(stdout, "ConstantWrapper %s\n", n);
+      
     String *symname = Getattr(n, "sym:name");
     SwigType *t = Getattr(n, "type");
     SwigType *valuetype = Getattr(n, "valuetype");
@@ -1581,7 +1605,7 @@ public:
       } else {
 	scope = Copy(constants_interface_name);
       }
-      if (!addSymbol(itemname, n, scope))
+      if (!is_expect && !addSymbol(itemname, n, scope))
 	return SWIG_ERROR;
       Delete(scope);
     }
@@ -1622,11 +1646,17 @@ public:
     const String *methodmods = Getattr(n, "feature:java:methodmodifiers");
     methodmods = methodmods ? methodmods : (is_public(n) ? public_string : protected_string);
 
-    Printf(constants_code, "  %s val %s: %s = ", methodmods, itemname, return_type);
+    if (!is_expect) {
+      Printf(constants_code, "  actual");
+    }
+    
+    Printf(constants_code, " %s val %s: %s", methodmods, itemname, return_type);
 
     // Check for the %javaconstvalue feature
     String *value = Getattr(n, "feature:java:constvalue");
 
+    if (!is_expect) {
+      Printf(constants_code, " = ");
     if (value) {
       Printf(constants_code, "%s;\n", value);
     } else if (!const_feature_flag) {
@@ -1660,7 +1690,10 @@ public:
         Printf(constants_code, "%s;\n", Getattr(n, "value"));
       }
     }
-
+    }else{
+        Printf(constants_code, "\n");
+    }
+       
     // Emit the generated code to appropriate place
     // Enums only emit the intermediate and JNI methods, so no proxy or module class wrapper methods needed
     if (!is_enum_item) {
@@ -1815,6 +1848,15 @@ public:
     }
     return Language::pragmaDirective(n);
   }
+  
+  virtual int extendDirective(Node* n) {
+      Printf(stdout, "%s\n", n);
+      if (!is_expect) {
+          
+        return Language::extendDirective(n);
+      }
+      return SWIG_OK;
+  }
 
   /* -----------------------------------------------------------------------------
    * getQualifiedInterfaceName()
@@ -1899,7 +1941,7 @@ public:
     String *jniname = makeValidJniName(upcast_method_name);
     String *wname = Swig_name_wrapper(jniname);
 
-    Printf(imclass_cppcasts_code, " long %s(long jarg1);\n", upcast_method_name);
+    Printf(imclass_cppcasts_code, " intptr_t %s(intptr_t jarg1);\n", upcast_method_name);
 
     String *classname = SwigType_namestr(c_classname);
     String *baseclassname = SwigType_namestr(c_baseclassname);
@@ -1913,7 +1955,7 @@ public:
       Replaceall(bsmartnamestr, rclassname, rbaseclassname);
 
       Printv(upcasts_code,
-	  "SWIGEXPORT long JNICALL ", upcast_method_name, "(long jarg1) {\n",
+	  "SWIGEXPORT intptr_t JNICALL ", upcast_method_name, "(intptr_t jarg1) {\n",
 	  "    long baseptr = 0;\n"
 	  "    ", smartnamestr, " *argp1;\n"
 	  "    argp1 = *(", smartnamestr, " **)&jarg1;\n"
@@ -1927,7 +1969,7 @@ public:
       Delete(smartnamestr);
     } else {
       Printv(upcasts_code,
-	  "SWIGEXPORT long JNICALL ", upcast_method_name, "(long jarg1) {\n",
+	  "SWIGEXPORT intptr_t JNICALL ", upcast_method_name, "(intptr_t jarg1) {\n",
 	  "    long baseptr = 0;\n"
 	  "    *(", baseclassname, " **)&baseptr = *(", classname, " **)&jarg1;\n"
 	  "    return baseptr;\n"
@@ -1989,7 +2031,7 @@ public:
     }
 
     Hash *interface_bases = Getattr(n, "interface:bases");
-    if (interface_bases)
+    if (!is_expect && interface_bases)
       addInterfaceNameAndUpcasts(smart, interface_list, interface_upcasts, interface_bases, c_classname);
 
     bool derived = baseclass != 0;
@@ -2030,15 +2072,15 @@ public:
 
     if (has_outerclass)
       Printv(proxy_class_def, "static ", NIL); // C++ nested classes correspond to static java classes
-    Printv(proxy_class_def, typemapLookup(n, "javaclassmodifiers", typemap_lookup_type, WARN_JAVA_TYPEMAP_CLASSMOD_UNDEF),	// Class modifiers
+    Printv(proxy_class_def, typemapLookup(n, is_expect? "expectclassmodifiers" : "javaclassmodifiers", typemap_lookup_type, WARN_JAVA_TYPEMAP_CLASSMOD_UNDEF),	// Class modifiers
 	   " $javaclassname",	// Class name and bases
 	   (*Char(wanted_base) || *Char(interface_list)) ? " : " : "", wanted_base, (*Char(wanted_base) && *Char(interface_list))?	// Pure Java interfaces
-	   " , " : "", interface_list, " {", derived ? typemapLookup(n, "javabody_derived", typemap_lookup_type, WARN_JAVA_TYPEMAP_JAVABODY_UNDEF) :	// main body of class
-	   typemapLookup(n, "javabody", typemap_lookup_type, WARN_JAVA_TYPEMAP_JAVABODY_UNDEF),	// main body of class
+	   " , " : "", interface_list, " {", derived ? typemapLookup(n, is_expect ? "expectbody" : "javabody_derived", typemap_lookup_type, WARN_JAVA_TYPEMAP_JAVABODY_UNDEF) :	// main body of class
+	   typemapLookup(n, is_expect ? "expectbody" : "javabody", typemap_lookup_type, WARN_JAVA_TYPEMAP_JAVABODY_UNDEF),	// main body of class
 	   NIL);
 
-    Append(companion_object_attrs, typemapLookup(n, "getcptr", typemap_lookup_type, WARN_NONE));
-    
+    Append(companion_object_attrs, typemapLookup(n, is_expect ? "expectgetcptr" : "getcptr", typemap_lookup_type, WARN_NONE));
+
     // C++ destructor is wrapped by the delete method
     // Note that the method name is specified in a typemap attribute called methodname
     String *destruct = NewString("");
@@ -2083,11 +2125,14 @@ public:
       if (*Char(destruct)) {
 	Printv(proxy_class_def, "\n  ", NIL);
 	const String *methodmods = Getattr(n, "destructmethodmodifiers");
+        if (!is_expect) {
+            Printv(proxy_class_def, "actual ", NIL);
+        }
 	if (methodmods)
 	  Printv(proxy_class_def, methodmods, NIL);
 	else
 	  Printv(proxy_class_def, destruct_methodmodifiers, NIL);
-	Printv(proxy_class_def, " fun ", destruct_methodname, "(", destruct_parameters, ")", destructor_throws_clause, " ", destruct, "\n", NIL);
+	Printv(proxy_class_def, " fun ", destruct_methodname, "(", destruct_parameters, ")", destructor_throws_clause, " ", is_expect ? "" : destruct, "\n", NIL);
       }
     }
     if (*Char(interface_upcasts))
@@ -2122,7 +2167,7 @@ public:
     Printv(proxy_class_def, typemapLookup(n, "javacode", typemap_lookup_type, WARN_NONE),	// extra Java code
 	   "\n", NIL);
 
-    if (derived) {
+    if (!is_expect && derived) {
       String *upcast_method_name = Swig_name_member(getNSpace(), getClassPrefix(), smart != 0 ? "SWIGSmartPtrUpcast" : "SWIGUpcast");
       upcastsCode(smart, upcast_method_name, c_classname, c_baseclassname);
       Delete(upcast_method_name);
@@ -2188,11 +2233,9 @@ public:
     return Language::classDeclaration(n);
   }
 
-  /* ----------------------------------------------------------------------
-  * classHandler()
-  * ---------------------------------------------------------------------- */
-
-  virtual int classHandler(Node *n) {
+  
+  int classHandler(Node *n, bool is_expect) {
+    this->is_expect = is_expect;
     File *f_proxy = NULL;
     File *f_interface = NULL;
     String *old_proxy_class_name = proxy_class_name;
@@ -2249,32 +2292,38 @@ public:
       String *interface_name = Getattr(n, "feature:interface") ? Getattr(n, "interface:name") : 0;
       if (outerClassesPrefix) {
 	String *fnspace = nspace ? NewStringf("%s.%s", nspace, outerClassesPrefix) : outerClassesPrefix;
-	if (!addSymbol(proxy_class_name, n, fnspace))
+	if (!is_expect && !addSymbol(proxy_class_name, n, fnspace))
 	  return SWIG_ERROR;
-	if (interface_name && !addInterfaceSymbol(interface_name, n, fnspace))
+	if (!is_expect && interface_name && !addInterfaceSymbol(interface_name, n, fnspace))
 	  return SWIG_ERROR;
 	if (nspace)
 	  Delete(fnspace);
 	Delete(outerClassesPrefix);
       } else {
-	if (!addSymbol(proxy_class_name, n, nspace))
+	if (!is_expect && !addSymbol(proxy_class_name, n, nspace))
 	  return SWIG_ERROR;
-	if (interface_name && !addInterfaceSymbol(interface_name, n, nspace))
+	if (!is_expect && interface_name && !addInterfaceSymbol(interface_name, n, nspace))
 	  return SWIG_ERROR;
       }
 
       // Each outer proxy class goes into a separate file
       if (!has_outerclass) {
 	String *output_directory = outputDirectory(nspace);
+//        String *common_output_directory = Copy(output_directory);
+//        Printv(common_output_directory, "common", SWIG_FILE_DELIMITER, 0);
+//        if (is_expect)
+//            Swig_new_subdirectory(output_directory, common_output_directory);
 	String *filen = NewStringf("%s%s.kt", output_directory, proxy_class_name);
 	f_proxy = NewFile(filen, "w", SWIG_output_files());
-	if (!f_proxy) {
+        if (!f_proxy) {
 	  FileErrorDisplay(filen);
 	  SWIG_exit(EXIT_FAILURE);
 	}
+        
 	Append(filenames_list, Copy(filen));
 	Delete(filen);
 	Delete(output_directory);
+        //Delete(common_output_directory);
 
 	// Start writing out the proxy class file
 	emitBanner(f_proxy);
@@ -2287,11 +2336,14 @@ public:
 	    Printv(f_proxy, package, nspace ? "." : "", NIL);
 	  if (nspace)
 	    Printv(f_proxy, nspace, NIL);
-	  Printf(f_proxy, ";\n");
+	    Printf(f_proxy, ";\n");
 	}
         
-        Printf(f_proxy, "import kotlinx.cinterop.* \n");
-                
+        if (!is_expect){
+            Printf(f_proxy, "import kotlinx.cinterop.* \n");
+            Printf(f_proxy, "import kotlin.native.concurrent.* \n");
+        }
+            
       }
       else
 	++nesting_depth;
@@ -2366,7 +2418,11 @@ public:
       }
 
       if (Len(companion_object_attrs) != 0) {
-      Printf(f_proxy, "companion object {\n");
+        if (!is_expect){
+          Printf(f_proxy, "actual companion object {\n");
+        }else{
+          Printf(f_proxy, "companion object {\n");  
+        }
       Iterator attr = First(companion_object_attrs);
       Replaceall(attr.item, "$javaclassname", proxy_class_name);
       Printf(f_proxy, "%s ", attr.item);
@@ -2420,6 +2476,14 @@ public:
     }
 
     return SWIG_OK;
+  }
+  
+  /* ----------------------------------------------------------------------
+  * classHandler()
+  * ---------------------------------------------------------------------- */
+
+  virtual int classHandler(Node *n) {
+    return classHandler(n, true) == SWIG_OK ? classHandler(n, false) : SWIG_ERROR;
   }
 
   /* ----------------------------------------------------------------------
@@ -2555,7 +2619,11 @@ public:
     /* Start generating the proxy function */
     const String *methodmods = Getattr(n, "feature:java:methodmodifiers");
     methodmods = methodmods ? methodmods : (is_public(n) ? public_string : protected_string);
-    Printf(function_code, "  %s ", methodmods);
+    if (!is_expect) {
+        Printf(function_code, "  %s %s ", "actual", methodmods);
+    }else{
+        Printf(function_code, "  %s ", methodmods);
+    }
 //    if (static_flag)
 //      Printf(function_code, "static ");
     
@@ -2749,6 +2817,7 @@ public:
       Printf(interface_class_code, ";\n");
     }
     generateThrowsClause(n, function_code);
+    tm = is_expect ? Swig_typemap_lookup("expectjavaout", n, "", 0) : tm;
     Printf(function_code, " %s\n\n", tm ? tm : empty_string);
     
     if (!static_flag) {
@@ -2808,7 +2877,11 @@ public:
 	Delete(doxygen_comments);
       }
 
-      Printf(function_code, "  %s constructor(", methodmods);
+      if (!is_expect) {
+        Printf(function_code, "  actual %s constructor(", methodmods);
+      } else {
+        Printf(function_code, "  %s constructor(", methodmods);  
+      }
       Printf(helper_code, "  static private %s SwigConstruct%s(", im_return_type, proxy_class_name);
 
       Printv(imcall, full_imclass_name, ".", mangled_overname, "(", NIL);
@@ -2934,7 +3007,7 @@ public:
 	  }
 	}
 
-	Printv(function_code, " ", construct_tm, "\n", NIL);
+	Printv(function_code, " ", is_expect ? "" : construct_tm, "\n", NIL);
       }
 
       bool is_pre_code = Len(pre_code) > 0;
@@ -3754,6 +3827,29 @@ public:
 
   String *outputDirectory(String *nspace) {
     String *output_directory = Copy(SWIG_output_directory());
+    Replaceall(output_directory, package_path, "");
+    String *dir = Copy(output_directory);
+    if (is_expect){
+        String *newdir_error = Swig_new_subdirectory(dir, NewString("commonMain"));
+        Printv(output_directory, "commonMain", SWIG_FILE_DELIMITER, 0);
+        if (newdir_error) {
+          Printf(stderr, "%s\n", newdir_error);
+          Delete(newdir_error);
+          SWIG_exit(EXIT_FAILURE);
+        }
+    } else {
+        String *newdir_error = Swig_new_subdirectory(dir, NewString("nativeMain"));
+        Printv(output_directory, "nativeMain",SWIG_FILE_DELIMITER, 0);
+        if (newdir_error) {
+            Printf(stderr, "%s\n", newdir_error);
+            Delete(newdir_error);
+            SWIG_exit(EXIT_FAILURE);
+        }  
+    }
+    Swig_new_subdirectory(output_directory, package_path);
+    Printv(output_directory, package_path, SWIG_FILE_DELIMITER, 0);
+    Delete(dir);
+    
     if (nspace) {
       String *nspace_subdirectory = Copy(nspace);
       Replaceall(nspace_subdirectory, ".", SWIG_FILE_DELIMITER);
@@ -3768,7 +3864,7 @@ public:
     }
     return output_directory;
   }
-
+  
   /*----------------------------------------------------------------------
    * Start of director methods
    *--------------------------------------------------------------------*/
